@@ -1,0 +1,76 @@
+{
+  "settings": {
+    "screenshots-enabled": false
+  },
+  "rules": [
+    {
+      "patterns": [
+        "/users/sign_in",
+        "/users/sign_up",
+        "/users/password/new",
+        "/users/password/edit"
+      ],
+      "properties": {
+        "context": "modal",
+        "presentation": "default",
+        "pull_to_refresh_enabled": false,
+        "animated": true
+      }
+    },
+    {
+      "patterns": [
+        "/users/auth/google_oauth2"
+      ],
+      "properties": {
+        "context": "modal",
+        "presentation": "default",
+        "pull_to_refresh_enabled": false
+      }
+    },
+    {
+      "patterns": [
+        "/lead",
+        "/discover_3d",
+        "/notifications",
+        "/matches",
+        "/meu-perfil"
+      ],
+      "properties": {
+        "context": "default",
+        "presentation": "replace",
+        "pull_to_refresh_enabled": false
+      }
+    },
+    {
+      "patterns": [
+        "/matches/.*/messages"
+      ],
+      "properties": {
+        "context": "default",
+        "presentation": "default",
+        "pull_to_refresh_enabled": true
+      }
+    },
+    {
+      "patterns": [
+        "/users/.*/edit",
+        "/users/edit"
+      ],
+      "properties": {
+        "context": "modal",
+        "presentation": "default",
+        "pull_to_refresh_enabled": false
+      }
+    },
+    {
+      "patterns": [
+        "/.*"
+      ],
+      "properties": {
+        "context": "default",
+        "presentation": "default",
+        "pull_to_refresh_enabled": true
+      }
+    }
+  ]
+}
