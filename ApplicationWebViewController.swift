@@ -6,6 +6,17 @@ private let appBackgroundColor = UIColor(red: 28/255, green: 28/255, blue: 30/25
 
 final class ApplicationWebViewController: VisitableViewController {
 
+    let customVisitableURL: URL
+
+    override init(url: URL) {
+        self.customVisitableURL = url
+        super.init(url: url)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
     // MARK: - Title
 
     // Bloqueia a propagação do <title> HTML para o tabBarItem da aba
@@ -49,13 +60,13 @@ final class ApplicationWebViewController: VisitableViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        navigationController?.setNavigationBarHidden(true, animated: false)
+        navigationController?.setNavigationBarHidden(true, animated: animated)
         setNeedsStatusBarAppearanceUpdate()
+        updateTabBarVisibility()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        navigationController?.setNavigationBarHidden(true, animated: false)
     }
 
     // MARK: - VisitableViewController
@@ -86,6 +97,38 @@ final class ApplicationWebViewController: VisitableViewController {
     override func visitableDidRender() {
         super.visitableDidRender()
         finishProgress()
+        updateTabBarVisibility()
+    }
+
+    private func updateTabBarVisibility() {
+        let js = """
+        (function() {
+            var path = window.location.pathname;
+            var hasPassword = document.querySelector('input[type="password"]') !== null;
+            var isLandingPage = document.querySelector('a[href*="sign_in"]') !== null || document.querySelector('a[href*="sign_up"]') !== null;
+            var shouldHide = false;
+            if (path === '/' && isLandingPage) {
+                shouldHide = true;
+            } else if ((path.includes('sign_in') || path.includes('sign_up') || path.includes('password')) && hasPassword) {
+                shouldHide = true;
+            }
+            return { path: path, hasPassword: hasPassword, shouldHide: shouldHide };
+        })();
+        """
+        self.visitableView.webView?.evaluateJavaScript(js) { [weak self] result, _ in
+            guard let self,
+                  let dict = result as? [String: Any],
+                  let path = dict["path"] as? String,
+                  let hasPassword = dict["hasPassword"] as? Bool,
+                  let shouldHide = dict["shouldHide"] as? Bool else { return }
+            print("🚨 [JS DEBUG] URL: \(path) | Tem Senha? \(hasPassword) | Ocultar? \(shouldHide)")
+            DispatchQueue.main.async {
+                guard let tabBar = self.tabBarController?.tabBar, tabBar.isHidden != shouldHide else { return }
+                tabBar.isHidden = shouldHide
+                self.view.setNeedsLayout()
+                self.view.layoutIfNeeded()
+            }
+        }
     }
 
     // MARK: - Progress bar

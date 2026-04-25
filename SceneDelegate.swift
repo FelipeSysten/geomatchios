@@ -8,19 +8,15 @@ import SafariServices
 private let appBackgroundColor = UIColor(red: 28/255, green: 28/255, blue: 30/255, alpha: 1)
 private let accentColor        = UIColor(red: 0.91, green: 0.22, blue: 0.35, alpha: 1)
 
-private let unauthPaths = ["/users/sign_in", "/users/sign_up", "/users/password", "/users/auth"]
-
 // MARK: - SceneDelegate
 
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     var window: UIWindow?
 
-    // UITabBarController is ALWAYS the root — never swapped out.
-    // Login is a fullscreen modal presented on top of it.
     private var tabBarController: UITabBarController!
     private var tabSessions: [Session] = []
-    private var authSession: Session?
+    private var tabURLs: [URL] = []
 
     private struct TabConfig {
         let path: String; let title: String; let icon: String; let customImageName: String?
@@ -52,9 +48,6 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         tabBarController = buildTabBarController()
         window?.rootViewController = tabBarController
         window?.makeKeyAndVisible()
-
-        // Present login modal on top — tab bar is always underneath
-        presentLoginModal(animated: false)
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {}
@@ -63,39 +56,13 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     func sceneWillEnterForeground(_ scene: UIScene) {}
     func sceneDidEnterBackground(_ scene: UIScene) {}
 
-    // MARK: - Login Modal
-
-    private func presentLoginModal(animated: Bool) {
-        authSession = nil
-
-        let session = makeSession()
-        authSession = session
-
-        let signInURL = AppConfiguration.serverURL.appendingPathComponent("users/sign_in")
-        let vc  = ApplicationWebViewController(url: signInURL)
-        let nav = UINavigationController(rootViewController: vc)
-        nav.setNavigationBarHidden(true, animated: false)
-        nav.view.backgroundColor = appBackgroundColor
-        nav.modalPresentationStyle = .fullScreen   // covers tab bar completely
-        nav.modalTransitionStyle   = .crossDissolve
-
-        if let existing = tabBarController.presentedViewController {
-            existing.dismiss(animated: false) {
-                self.tabBarController.present(nav, animated: animated)
-            }
-        } else {
-            tabBarController.present(nav, animated: animated)
-        }
-
-        session.visit(vc)
-    }
-
     // MARK: - Tab bar factory
 
     private func buildTabBarController() -> UITabBarController {
         let navs = tabConfigs.map { makeTabNav(config: $0) }
         let tbc  = UITabBarController()
         tbc.viewControllers = navs
+        tbc.delegate = self
         applyTabBarAppearance(to: tbc.tabBar)
         return tbc
     }
@@ -113,12 +80,12 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
         let vc  = ApplicationWebViewController(url: url)
         let nav = UINavigationController(rootViewController: vc)
-        nav.setNavigationBarHidden(true, animated: false)
         nav.view.backgroundColor = appBackgroundColor
         nav.tabBarItem = UITabBarItem(title: config.title, image: tabImage, selectedImage: tabImage)
 
         let session = makeSession()
         tabSessions.append(session)
+        tabURLs.append(url)
         session.visit(vc)
         return nav
     }
@@ -159,10 +126,6 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     // MARK: - Helpers
 
-    private func isUnauthURL(_ url: URL) -> Bool {
-        unauthPaths.contains(where: { url.path.hasPrefix($0) })
-    }
-
     private func navController(for session: Session) -> UINavigationController? {
         guard let index = tabSessions.firstIndex(where: { $0 === session }) else { return nil }
         return tabBarController?.viewControllers?[index] as? UINavigationController
@@ -177,9 +140,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         safari.preferredBarTintColor     = appBackgroundColor
         safari.preferredControlTintColor = accentColor
         safari.delegate = self
-        // Present over login modal if it's up, otherwise over tab bar
-        let presenter = tabBarController.presentedViewController ?? tabBarController
-        presenter?.present(safari, animated: true)
+        tabBarController.present(safari, animated: true)
     }
 }
 
@@ -209,54 +170,6 @@ extension SceneDelegate: SessionDelegate {
     func sessionDidLoadWebView(_ session: Session) {}
 
     func session(_ session: Session, didProposeVisit proposal: VisitProposal) {
-        // ── Auth session (login modal) ───────────────────────────────────────
-        if session === authSession {
-            // Authenticated URL → dismiss modal, hand the proposal to the first tab session
-            if !isUnauthURL(proposal.url) {
-                authSession = nil
-                tabBarController.dismiss(animated: true) {
-                    // Find the tab whose session should handle this URL, defaulting to tab 0
-                    let targetSession = self.tabSessions.first
-                    guard let nav = self.tabBarController.viewControllers?.first as? UINavigationController,
-                          let ts = targetSession else {
-                        self.tabSessions.forEach { $0.reload() }
-                        return
-                    }
-                    let vc = ApplicationWebViewController(url: proposal.url)
-                    nav.setViewControllers([vc], animated: false)
-                    ts.visit(vc)
-                }
-                return
-            }
-
-            // Navigate within login flow (sign_up, forgot password, etc.)
-            guard let loginNav = tabBarController.presentedViewController as? UINavigationController else { return }
-
-            let vc           = ApplicationWebViewController(url: proposal.url)
-            let context      = proposal.properties["context"]      as? String ?? "default"
-            let presentation = proposal.properties["presentation"] as? String ?? "default"
-
-            if context == "modal" {
-                let modalNav = UINavigationController(rootViewController: vc)
-                modalNav.setNavigationBarHidden(true, animated: false)
-                modalNav.view.backgroundColor = appBackgroundColor
-                loginNav.present(modalNav, animated: true)
-            } else if presentation == "replace" {
-                loginNav.setViewControllers([vc], animated: false)
-            } else {
-                loginNav.pushViewController(vc, animated: true)
-            }
-            session.visit(vc)
-            return
-        }
-
-        // ── Tab sessions ─────────────────────────────────────────────────────
-        if isUnauthURL(proposal.url) {
-            // Logout → show login modal again
-            presentLoginModal(animated: true)
-            return
-        }
-
         guard let nav = navController(for: session) else { return }
 
         let context      = proposal.properties["context"]      as? String ?? "default"
@@ -265,7 +178,6 @@ extension SceneDelegate: SessionDelegate {
 
         if context == "modal" {
             let modalNav = UINavigationController(rootViewController: vc)
-            modalNav.setNavigationBarHidden(true, animated: false)
             modalNav.view.backgroundColor = appBackgroundColor
             nav.present(modalNav, animated: true)
             session.visit(vc)
@@ -287,11 +199,40 @@ extension SceneDelegate: SessionDelegate {
     }
 }
 
+// MARK: - UITabBarControllerDelegate
+
+extension SceneDelegate: UITabBarControllerDelegate {
+    func tabBarController(_ tabBarController: UITabBarController, didSelect viewController: UIViewController) {
+        let tabPaths: [Int: String] = [
+            0: "lead",
+            1: "discover_3d",
+            2: "notifications",
+            3: "matches",
+            4: "meu-perfil"
+        ]
+
+        guard let nav   = viewController as? UINavigationController,
+              let topVC = nav.topViewController as? ApplicationWebViewController,
+              let currentURL = topVC.visitableView.webView?.url,
+              let index = tabBarController.viewControllers?.firstIndex(of: viewController),
+              index < tabSessions.count,
+              let path = tabPaths[index] else { return }
+
+        let currentPath = currentURL.path
+        guard currentPath.contains("sign_in") || currentPath.contains("sign_up") || currentPath.contains("password") else { return }
+
+        // Aba presa na tela de login — redireciona para a rota original
+        let originalURL = AppConfiguration.serverURL.appendingPathComponent(path)
+        let vc = ApplicationWebViewController(url: originalURL)
+        nav.setViewControllers([vc], animated: false)
+        tabSessions[index].visit(vc)
+    }
+}
+
 // MARK: - SFSafariViewControllerDelegate
 
 extension SceneDelegate: SFSafariViewControllerDelegate {
     func safariViewControllerDidFinish(_ controller: SFSafariViewController) {
         tabSessions.forEach { $0.reload() }
-        authSession?.reload()
     }
 }
