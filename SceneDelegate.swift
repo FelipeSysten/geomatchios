@@ -48,6 +48,27 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         tabBarController = buildTabBarController()
         window?.rootViewController = tabBarController
         window?.makeKeyAndVisible()
+
+        observeNotificationURL()
+    }
+
+    private func observeNotificationURL() {
+        NotificationCenter.default.addObserver(forName: .notificationURLReceived, object: nil, queue: .main) { [weak self] notification in
+            guard let self, let url = notification.object as? URL else { return }
+            self.navigateToNotificationURL(url)
+        }
+    }
+
+    private func navigateToNotificationURL(_ url: URL) {
+        // Descobre qual aba corresponde à URL e seleciona-a; senão usa a aba de notificações (index 2)
+        let path = url.path
+        let targetIndex = tabConfigs.firstIndex(where: { path.hasPrefix($0.path) }) ?? 2
+        tabBarController.selectedIndex = targetIndex
+        guard let nav = tabBarController.viewControllers?[targetIndex] as? UINavigationController else { return }
+        let vc = ApplicationWebViewController(url: url)
+        nav.dismiss(animated: false)
+        nav.setViewControllers([vc], animated: false)
+        tabSessions[targetIndex].visit(vc)
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {}
@@ -170,6 +191,31 @@ extension SceneDelegate: SessionDelegate {
     func sessionDidLoadWebView(_ session: Session) {}
 
     func session(_ session: Session, didProposeVisit proposal: VisitProposal) {
+        // Se a URL corresponde à rota raiz de uma aba, redirecionar para ela e sincronizar a seleção
+        let proposedPath = proposal.url.path
+        if let tabIndex = tabConfigs.firstIndex(where: { $0.path == proposedPath }),
+           let targetNav = tabBarController.viewControllers?[tabIndex] as? UINavigationController {
+            tabBarController.selectedIndex = tabIndex
+            let vc = ApplicationWebViewController(url: proposal.url)
+            targetNav.setViewControllers([vc], animated: false)
+            tabSessions[tabIndex].visit(vc)
+
+            // Resetar visualmente a sessão de origem sem disparar nova requisição de rede —
+            // o carregamento real acontece lazily quando o usuário tocar na aba (via didSelect)
+            if let sourceIndex = tabSessions.firstIndex(where: { $0 === session }),
+               sourceIndex != tabIndex,
+               let sourceNav = tabBarController.viewControllers?[sourceIndex] as? UINavigationController {
+                let sourcePath = tabConfigs[sourceIndex].path
+                let sourceTrimmed = sourcePath.hasPrefix("/") ? String(sourcePath.dropFirst()) : sourcePath
+                let sourceHomeURL = AppConfiguration.serverURL.appendingPathComponent(sourceTrimmed)
+                let sourceVC = ApplicationWebViewController(url: sourceHomeURL)
+                sourceNav.dismiss(animated: false)
+                sourceNav.setViewControllers([sourceVC], animated: false)
+                // Sem session.visit aqui — evita requisição prematura antes do cookie estar disponível
+            }
+            return
+        }
+
         guard let nav = navController(for: session) else { return }
 
         let context      = proposal.properties["context"]      as? String ?? "default"
@@ -179,8 +225,15 @@ extension SceneDelegate: SessionDelegate {
         if context == "modal" {
             let modalNav = UINavigationController(rootViewController: vc)
             modalNav.view.backgroundColor = appBackgroundColor
-            nav.present(modalNav, animated: true)
-            session.visit(vc)
+            // Se já há um modal de sign_in, apenas visitar o vc dentro dele (sem apresentar novo)
+            if let existingModal = nav.presentedViewController as? UINavigationController,
+               existingModal.topViewController is ApplicationWebViewController {
+                existingModal.setViewControllers([vc], animated: false)
+                session.visit(vc)
+            } else {
+                nav.present(modalNav, animated: true)
+                session.visit(vc)
+            }
         } else if presentation == "replace" {
             nav.setViewControllers([vc], animated: false)
             session.visit(vc)
@@ -203,6 +256,15 @@ extension SceneDelegate: SessionDelegate {
 
 extension SceneDelegate: UITabBarControllerDelegate {
     func tabBarController(_ tabBarController: UITabBarController, didSelect viewController: UIViewController) {
+
+        // 1. Identifica qual aba foi clicada
+        guard let index = tabBarController.viewControllers?.firstIndex(of: viewController),
+              index < tabSessions.count else { return }
+
+        let nav = viewController as? UINavigationController
+        let session = tabSessions[index]
+
+        // 2. Define os caminhos esperados
         let tabPaths: [Int: String] = [
             0: "lead",
             1: "discover_3d",
@@ -211,21 +273,30 @@ extension SceneDelegate: UITabBarControllerDelegate {
             4: "meu-perfil"
         ]
 
-        guard let nav   = viewController as? UINavigationController,
-              let topVC = nav.topViewController as? ApplicationWebViewController,
-              let currentURL = topVC.visitableView.webView?.url,
-              let index = tabBarController.viewControllers?.firstIndex(of: viewController),
-              index < tabSessions.count,
-              let path = tabPaths[index] else { return }
+        guard let path = tabPaths[index] else { return }
+        let expectedURL = AppConfiguration.serverURL.appendingPathComponent(path)
 
-        let currentPath = currentURL.path
-        guard currentPath.contains("sign_in") || currentPath.contains("sign_up") || currentPath.contains("password") else { return }
+        // 3. Pega a URL que a WebView está exibindo agora
+        let currentWebViewURL = (nav?.topViewController as? VisitableViewController)?.visitableView.webView?.url
 
-        // Aba presa na tela de login — redireciona para a rota original
-        let originalURL = AppConfiguration.serverURL.appendingPathComponent(path)
-        let vc = ApplicationWebViewController(url: originalURL)
-        nav.setViewControllers([vc], animated: false)
-        tabSessions[index].visit(vc)
+        print("DEBUG: Clicou na aba \(index). URL Atual: \(currentWebViewURL?.path ?? "nil") | Esperada: \(expectedURL.path)")
+
+        // --- LÓGICA DE CORREÇÃO ---
+
+        let currentPath  = currentWebViewURL?.path ?? ""
+        let isNotLoaded  = currentPath.isEmpty
+        let isOnAuth     = currentPath.contains("sign_in") || currentPath.contains("sign_up") || currentPath.contains("password")
+        let otherHomes   = tabPaths.filter { $0.key != index }.values.map { "/\($0)" }
+        let isOnWrongTab = otherHomes.contains(currentPath)
+        let isTab0Wrong  = index == 0 && !isNotLoaded && currentPath != "/lead"
+
+        if isNotLoaded || isOnAuth || isOnWrongTab || isTab0Wrong {
+            print("REDIRECIONANDO: aba \(index) estava em '\(currentPath.isEmpty ? "não carregada" : currentPath)', forçando '/\(path)'")
+            let vc = ApplicationWebViewController(url: expectedURL)
+            nav?.dismiss(animated: false)
+            nav?.setViewControllers([vc], animated: false)
+            session.visit(vc)
+        }
     }
 }
 

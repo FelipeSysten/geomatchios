@@ -41,6 +41,8 @@ final class ApplicationWebViewController: VisitableViewController {
     }()
 
     private var progressObservation: NSKeyValueObservation?
+    private var apnsTokenObserver: NSObjectProtocol?
+    private var apnsTokenRegistered = false
 
     // MARK: - Lifecycle
 
@@ -81,6 +83,9 @@ final class ApplicationWebViewController: VisitableViewController {
         webView.isOpaque = false
         webView.backgroundColor = appBackgroundColor
         webView.scrollView.backgroundColor = appBackgroundColor
+        webView.scrollView.showsHorizontalScrollIndicator = false
+        webView.scrollView.alwaysBounceHorizontal = false
+        webView.scrollView.bounces = false
 
         progressObservation = webView.observe(\.estimatedProgress, options: .new) { [weak self] webView, _ in
             DispatchQueue.main.async {
@@ -98,6 +103,92 @@ final class ApplicationWebViewController: VisitableViewController {
         super.visitableDidRender()
         finishProgress()
         updateTabBarVisibility()
+        registerAPNSTokenIfNeeded()
+    }
+
+    // MARK: - APNs token registration
+
+    private static let apnsEndpoint = URL(string: "https://geomatch-cvtv.onrender.com/push_subscriptions/apns")!
+
+    private let authenticatedPaths = ["/lead", "/discover_3d", "/notifications", "/matches", "/meu-perfil"]
+
+    private func registerAPNSTokenIfNeeded() {
+        guard !apnsTokenRegistered else { return }
+
+        // Só tenta em rotas autenticadas — garante que o cookie de sessão Rails existe
+        guard authenticatedPaths.contains(where: { customVisitableURL.path.hasPrefix($0) }) else { return }
+
+        if let token = AppDelegate.apnsToken {
+            sendAPNSToken(token)
+        } else {
+            // Token APNs ainda não chegou; aguarda e tenta quando chegar
+            apnsTokenObserver = NotificationCenter.default.addObserver(
+                forName: .apnsTokenReady, object: nil, queue: .main
+            ) { [weak self] notification in
+                guard let self, let token = notification.object as? String else { return }
+                // Só envia se ainda estiver numa rota autenticada
+                guard self.authenticatedPaths.contains(where: { self.customVisitableURL.path.hasPrefix($0) }) else { return }
+                self.sendAPNSToken(token)
+                if let obs = self.apnsTokenObserver {
+                    NotificationCenter.default.removeObserver(obs)
+                    self.apnsTokenObserver = nil
+                }
+            }
+        }
+    }
+
+    private func sendAPNSToken(_ token: String) {
+        guard !apnsTokenRegistered else { return }
+
+        // 1. Lê o CSRF token do DOM da WebView
+        visitableView.webView?.evaluateJavaScript(
+            "document.querySelector('meta[name=\"csrf-token\"]')?.content ?? ''"
+        ) { [weak self] result, _ in
+            guard let self,
+                  let csrf = result as? String, !csrf.isEmpty else {
+                print("⚠️ [APNs] CSRF não encontrado — tentará novamente na próxima página autenticada")
+                return
+            }
+
+            // 2. Extrai cookies da WKWebsiteDataStore compartilhada e envia via URLSession
+            WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
+                self.postTokenToServer(token, csrf: csrf, cookies: cookies)
+            }
+        }
+    }
+
+    private func postTokenToServer(_ token: String, csrf: String, cookies: [HTTPCookie]) {
+        var request = URLRequest(url: Self.apnsEndpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(csrf, forHTTPHeaderField: "X-CSRF-Token")
+
+        // Injeta os cookies de sessão do Rails na requisição nativa
+        HTTPCookie.requestHeaderFields(with: cookies).forEach {
+            request.setValue($0.value, forHTTPHeaderField: $0.key)
+        }
+
+        request.httpBody = try? JSONSerialization.data(
+            withJSONObject: ["device_token": token, "platform": "ios"]
+        )
+
+        URLSession.shared.dataTask(with: request) { [weak self] _, response, _ in
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            DispatchQueue.main.async {
+                switch status {
+                case 200, 201, 204:
+                    self?.apnsTokenRegistered = true
+                    print("✅ [APNs] Token registrado com sucesso (HTTP \(status))")
+                case 401, 403:
+                    // Não autenticado — apnsTokenRegistered permanece false e
+                    // registerAPNSTokenIfNeeded() será chamado novamente na próxima
+                    // página autenticada via visitableDidRender()
+                    print("⚠️ [APNs] Não autenticado (HTTP \(status)) — aguardando login para retentar")
+                default:
+                    print("⚠️ [APNs] Falha ao registrar token (HTTP \(status)) — tentará novamente")
+                }
+            }
+        }.resume()
     }
 
     private func updateTabBarVisibility() {
@@ -121,12 +212,29 @@ final class ApplicationWebViewController: VisitableViewController {
                   let path = dict["path"] as? String,
                   let hasPassword = dict["hasPassword"] as? Bool,
                   let shouldHide = dict["shouldHide"] as? Bool else { return }
-            print("🚨 [JS DEBUG] URL: \(path) | Tem Senha? \(hasPassword) | Ocultar? \(shouldHide)")
             DispatchQueue.main.async {
-                guard let tabBar = self.tabBarController?.tabBar, tabBar.isHidden != shouldHide else { return }
-                tabBar.isHidden = shouldHide
-                self.view.setNeedsLayout()
-                self.view.layoutIfNeeded()
+                guard let tabBar = self.tabBarController?.tabBar else { return }
+                print("🚨 [JS DEBUG] URL: \(path) | Tem Senha? \(hasPassword) | Ocultar? \(shouldHide)")
+
+                if shouldHide {
+                    // Só oculta se esta for a aba ativa — evita que background esconda a barra
+                    guard self.tabBarController?.selectedViewController == self.navigationController else {
+                        print("🚨 [JS DEBUG] Aba no background tentou OCULTAR a barra. Bloqueado.")
+                        return
+                    }
+                    if !tabBar.isHidden {
+                        tabBar.isHidden = true
+                        self.view.setNeedsLayout()
+                        self.view.layoutIfNeeded()
+                    }
+                } else {
+                    // Qualquer aba pode MOSTRAR a barra — revelar é sempre seguro
+                    if tabBar.isHidden {
+                        tabBar.isHidden = false
+                        self.view.setNeedsLayout()
+                        self.view.layoutIfNeeded()
+                    }
+                }
             }
         }
     }

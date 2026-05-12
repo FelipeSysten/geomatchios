@@ -2,10 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleDevelopmentRegion</key>
-	<string>pt-BR</string>
 	<key>CFBundleAllowMixedLocalizations</key>
 	<true/>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>pt-BR</string>
 	<key>CFBundleDisplayName</key>
 	<string>GeoMatch</string>
 	<key>CFBundleExecutable</key>
@@ -17,14 +17,13 @@
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundlePackageType</key>
-	<string>$(PRODUCT_TYPE)</string>
+	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<!-- ATS: localhost liberado para dev; produção usa HTTPS padrão (Render TLS) -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
@@ -42,14 +41,12 @@
 			</dict>
 		</dict>
 	</dict>
-	<!-- Localização do usuário — necessário para o matching geolocalizado -->
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>O GeoMatch precisa da sua localização para encontrar pessoas próximas a você.</string>
-	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>O GeoMatch precisa da sua localização para mostrar você no mapa e encontrar matches próximos.</string>
-	<!-- Câmera e fotos para upload de perfil -->
 	<key>NSCameraUsageDescription</key>
 	<string>Tire uma foto para o seu perfil.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>O GeoMatch precisa da sua localização para mostrar você no mapa e encontrar matches próximos.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>O GeoMatch precisa da sua localização para encontrar pessoas próximas a você.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Escolha uma foto da galeria para o seu perfil.</string>
 	<key>UIApplicationSceneManifest</key>
