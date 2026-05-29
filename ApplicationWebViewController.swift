@@ -92,9 +92,19 @@ final class ApplicationWebViewController: VisitableViewController {
                 self?.setProgress(webView.estimatedProgress)
             }
         }
+
+        // Ponte JS ↔ Swift para localização
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "locationHandler")
+        webView.configuration.userContentController.add(WeakScriptMessageHandler(self), name: "locationHandler")
+        BackgroundLocationManager.shared.delegate = self
+        print("🔗 [PONTE NATIVA] WKScriptMessageHandler 'locationHandler' foi registrado na WebView com sucesso.")
     }
 
     override func visitableDidDeactivateWebView() {
+        visitableView.webView?.configuration.userContentController.removeScriptMessageHandler(forName: "locationHandler")
+        if BackgroundLocationManager.shared.delegate === self {
+            BackgroundLocationManager.shared.delegate = nil
+        }
         progressObservation = nil
         super.visitableDidDeactivateWebView()
     }
@@ -269,6 +279,36 @@ final class ApplicationWebViewController: VisitableViewController {
             self.progressBar.isHidden = true
             self.progressBar.alpha = 1
             self.progressBar.setProgress(0, animated: false)
+        }
+    }
+}
+
+// MARK: - BackgroundLocationManagerDelegate
+
+extension ApplicationWebViewController: BackgroundLocationManagerDelegate {
+    func didUpdateLocation(latitude: Double, longitude: Double) {
+        let js = "window.handleNativeLocationUpdate(\(latitude), \(longitude));"
+        visitableView.webView?.evaluateJavaScript(js, completionHandler: nil)
+    }
+}
+
+// MARK: - WKScriptMessageHandler (ponte JS → Swift)
+
+extension ApplicationWebViewController: WKScriptMessageHandler {
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        print("📥 [PONTE NATIVA] Mensagem recebida do JS! Nome: \(message.name), Corpo: \(message.body)")
+
+        guard message.name == "locationHandler", let body = message.body as? String else { return }
+
+        // CoreLocation exige chamadas na Main Thread
+        DispatchQueue.main.async {
+            if body == "startTracking" {
+                print("⚙️ [PONTE NATIVA] Despachando startUpdatingLocation() para o Manager...")
+                BackgroundLocationManager.shared.startUpdatingLocation()
+            } else if body == "stopTracking" {
+                print("⚙️ [PONTE NATIVA] Despachando stopUpdatingLocation() para o Manager...")
+                BackgroundLocationManager.shared.stopUpdatingLocation()
+            }
         }
     }
 }

@@ -49,6 +49,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window?.rootViewController = tabBarController
         window?.makeKeyAndVisible()
 
+        BackgroundLocationManager.shared.requestLocationAuthorization()
         observeNotificationURL()
     }
 
@@ -74,8 +75,15 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     func sceneDidDisconnect(_ scene: UIScene) {}
     func sceneDidBecomeActive(_ scene: UIScene) {}
     func sceneWillResignActive(_ scene: UIScene) {}
-    func sceneWillEnterForeground(_ scene: UIScene) {}
-    func sceneDidEnterBackground(_ scene: UIScene) {}
+
+    func sceneWillEnterForeground(_ scene: UIScene) {
+        // Retoma rastreamento ao voltar para foreground (pode ter parado por outro motivo)
+        BackgroundLocationManager.shared.startUpdatingLocation()
+    }
+
+    func sceneDidEnterBackground(_ scene: UIScene) {
+        // Não interrompe o rastreamento — allowsBackgroundLocationUpdates mantém o GPS ativo
+    }
 
     // MARK: - Tab bar factory
 
